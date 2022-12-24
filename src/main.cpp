@@ -44,6 +44,15 @@
 #define SKETCH_NAME "Temperature-Humidite"
 #define SKETCH_VERSION "1.0"
 
+// Sleep time between sensor updates (in milliseconds) to add to sensor delay (read from sensor data; typically: 1s)
+static const uint64_t UPDATE_INTERVAL = 60000; 
+
+// Force sending an update of the temperature after n sensor reads, so a controller showing the
+// timestamp of the last update doesn't show something like 3 hours in the unlikely case, that
+// the value didn't change since;
+// i.e. the sensor would force sending an update every UPDATE_INTERVAL*FORCE_UPDATE_N_READS [ms]
+static const uint8_t FORCE_UPDATE_N_READS = 10;
+
 // Wait times
 #define SHORT_WAIT 50
 #define LONG_WAIT 500
@@ -62,6 +71,8 @@ float T_Ressentie = -100;
 float prevHumidity = -100;
 float prevTemperature = -100;
 float prevT_Ressentie = -100;
+uint8_t nNoUpdates = FORCE_UPDATE_N_READS; // send data on start-up 
+
 Adafruit_Si7021 sensor = Adafruit_Si7021();
 
 MyMessage msgTEMP(CHILD_TEMP, V_TEMP);
@@ -180,11 +191,11 @@ void loop() {
   // put your main code here, to run repeatedly:
   Serial.print("Humidity:    "); Serial.print(Humidity, 2); Serial.print("\tTemperature: "); Serial.println(Temperature, 2);
 
-  if (fabs(Humidity - newHumidity) >= 0.05 || fabs(Temperature - newTemperature) >= 0.05) {
+  if (fabs(Humidity - newHumidity) >= 0.05 || fabs(Temperature - newTemperature) >= 0.05 || nNoUpdates >= FORCE_UPDATE_N_READS) {
     newTemperature = Temperature;
     newHumidity = Humidity;
     T_Ressentie = calculRessenti(Temperature,Humidity); //computes Heat Index, in *C
-
+    nNoUpdates = 0; // Reset no updates counter
     #ifdef MON_DEBUG
       Serial.print("T Ressentie: "); Serial.print(T_Ressentie); Serial.println(" *C");    
     #endif    
@@ -221,5 +232,15 @@ void loop() {
       wait(SHORT_WAIT);
     }
   }
+
+  nNoUpdates++;
+  
+  wait(400); // waiting for potential presentation requests
+  
+  #ifdef MON_DEBUG 
+    sleep(10000);
+  #else 
+    sleep(UPDATE_INTERVAL); 
+  #endif
 
 }
