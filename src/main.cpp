@@ -1,6 +1,7 @@
 /*************************************************
  * 
- *  Temperature Pression Si7021
+ *  Temperature Humidité Si7021
+ *  I²C-interface
  * 
  *  Use mysensors in Home assistant 
  *
@@ -12,7 +13,8 @@
  * ***********************************************/
 #include <Arduino.h>
 
-#define MON_DEBUG true
+//#define MY_DEBUG
+//#define MON_DEBUG
 
 #define MY_RADIO_RF24
 
@@ -26,7 +28,7 @@
 #define MY_RF24_IRQ_PIN (2)
 
 //NODE_ID
-#define MY_NODE_ID 10
+#define MY_NODE_ID 11
 
 #include <mysensors.h>
 #include <Adafruit_Si7021.h>
@@ -41,7 +43,7 @@
 #define SENSOR_HUM_OFFSET 0       // used for humidity data
 #define SENSOR_RESSENTI_OFFSET 0   // used for heat index data
 
-#define SKETCH_NAME "Temperature-Humidite"
+#define SKETCH_NAME "Temp-Hum-Si7021"
 #define SKETCH_VERSION "1.0"
 
 // Sleep time between sensor updates (in milliseconds) to add to sensor delay (read from sensor data; typically: 1s)
@@ -63,14 +65,18 @@ bool metric = true;
 
 bool enableHeater = false;
 uint8_t loopCnt = 0;
-float newHumidity = -100;
-float Humidity = -100;
-float newTemperature = -100;
-float Temperature = -100;
-float T_Ressentie = -100;
-float prevHumidity = -100;
-float prevTemperature = -100;
-float prevT_Ressentie = -100;
+
+float Temperature = -100.0;
+float Humidity = -100.0;
+float T_Ressentie = -100.0;
+
+float newTemperature = -100.0;
+float newHumidity = -100.0;
+
+float lastTemperature = -100.0;
+float lastHumidity = -100.0;
+float lastT_Ressentie = -100.0;
+
 uint8_t nNoUpdates = FORCE_UPDATE_N_READS; // send data on start-up 
 
 Adafruit_Si7021 sensor = Adafruit_Si7021();
@@ -114,7 +120,20 @@ float calculRessenti(float temperature, float percentHumidity) {
 
 }
 
+void Before() {
+
+  // Optional method - for initialisations that needs to take place before MySensors transport has been setup (eg: SPI devices).
+  Serial.begin(115200);
+
+  // wait for serial port to open
+  while (!Serial) {
+    delay(100);
+  }
+
+}
+
 void presentation()  {
+
   Serial.print("===> Envoyer présentation du noeud : "); Serial.println(MY_NODE_ID);
   sendSketchInfo(SKETCH_NAME, SKETCH_VERSION);
   wait(LONG_WAIT1);
@@ -151,9 +170,10 @@ void presentation()  {
 
 }
 
-
 void setup() {
+
   // put your setup code here, to run once:
+  Serial.println("----");
   Serial.println("Si7021 test!");
   
   if (!sensor.begin()) {
@@ -185,57 +205,85 @@ void setup() {
 
 void loop() {
 
+  // put your main code here, to run repeatedly:
   Temperature = sensor.readTemperature();
   Humidity = sensor.readHumidity();
 
-  // put your main code here, to run repeatedly:
-  Serial.print("Humidity:    "); Serial.print(Humidity, 2); Serial.print("\tTemperature: "); Serial.println(Temperature, 2);
+  #ifdef MON_DEBUG
+      Serial.print("Humidity:    "); Serial.print(Humidity, 2); Serial.print("\tTemperature: "); Serial.println(Temperature, 2);
+  #endif
+
+  //Pour Home assistant
+  static bool first_message_sent = false;
+  if (!first_message_sent) {
+    #ifdef MON_DEBUG 
+      Serial.println("======> Sending first message");
+    #endif 
+    send(msgTEMP.set(Temperature + SENSOR_TEMP_OFFSET,2));
+    wait(LONG_WAIT1);
+    send(msgHUM.set(Humidity + SENSOR_HUM_OFFSET,2));
+    wait(LONG_WAIT1);
+    send(msgRESSENTI.set(Temperature + SENSOR_RESSENTI_OFFSET,2));
+    wait(LONG_WAIT1);
+
+    first_message_sent = true;
+  }
 
   if (fabs(Humidity - newHumidity) >= 0.05 || fabs(Temperature - newTemperature) >= 0.05 || nNoUpdates >= FORCE_UPDATE_N_READS) {
+    
     newTemperature = Temperature;
     newHumidity = Humidity;
     T_Ressentie = calculRessenti(Temperature,Humidity); //computes Heat Index, in *C
-    nNoUpdates = 0; // Reset no updates counter
-    #ifdef MON_DEBUG
-      Serial.print("T Ressentie: "); Serial.print(T_Ressentie); Serial.println(" *C");    
-    #endif    
+    nNoUpdates = 0; // Reset no updates counter  
     
     if (!metric) {
       Temperature = 1.8*Temperature+32; //convertion to *F
       T_Ressentie = 1.8*T_Ressentie+32; //convertion to *F
     }
     
-    if (prevTemperature != Temperature) {
-      prevTemperature = Temperature;
+    if (lastTemperature != Temperature) {
+      lastTemperature = Temperature;
       #ifdef MON_DEBUG
-        Serial.print("Sending temperature: "); Serial.print(Temperature);
+        Serial.print("Sending temperature: "); Serial.print(Temperature); 
+        if (metric) {
+          Serial.println(" °C");
+        } else {
+          Serial.println(" °F");
+        }
       #endif      
       send(msgTEMP.set(Temperature + SENSOR_TEMP_OFFSET, 2));
       wait(SHORT_WAIT);
     }
 
-    if (prevHumidity != Humidity) {
-      prevHumidity = Humidity;
+      if (lastT_Ressentie != T_Ressentie) {
+      lastT_Ressentie = T_Ressentie;
       #ifdef MON_DEBUG
-        Serial.print("Sending humidity: "); Serial.print(Humidity);
+        Serial.print("Sending T ressentie: "); Serial.print(T_Ressentie); 
+        if (metric) {
+          Serial.println(" °C");
+        } else {
+          Serial.println(" °F");
+        }
+      #endif
+      send(msgRESSENTI.set(T_Ressentie + SENSOR_RESSENTI_OFFSET, 2));
+      wait(SHORT_WAIT);
+    }  
+    
+    if (lastHumidity != Humidity) {
+      lastHumidity = Humidity;
+      #ifdef MON_DEBUG
+        Serial.print("Sending humidity: "); Serial.print(Humidity); Serial.println(" %");
       #endif
       send(msgHUM.set(Humidity + SENSOR_HUM_OFFSET, 2));
       wait(SHORT_WAIT);
     }
 
-    if (prevT_Ressentie != T_Ressentie) {
-      prevT_Ressentie = T_Ressentie;
-      #ifdef MON_DEBUG
-        Serial.print("Sending T ressentie: "); Serial.print(T_Ressentie);
-      #endif
-      send(msgRESSENTI.set(T_Ressentie + SENSOR_RESSENTI_OFFSET, 2));
-      wait(SHORT_WAIT);
-    }
+
   }
 
   nNoUpdates++;
   
-  wait(400); // waiting for potential presentation requests
+  wait(500); // waiting for potential presentation requests
   
   #ifdef MON_DEBUG 
     sleep(10000);
